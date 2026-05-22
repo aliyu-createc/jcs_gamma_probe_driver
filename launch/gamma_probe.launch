@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Serial port for USB-to-RS485 adapter (e.g. /dev/ttyUSB0 on Linux, COM3 on Windows) -->
+    <arg name="port" default="/dev/ttyUSB0"/>
+    <arg name="baud_rate" default="9600"/>
+
+    <!-- TCP bridge mode (set tcp_host to enable, e.g. host.docker.internal) -->
+    <arg name="tcp_host" default=""/>
+    <arg name="tcp_port" default="3241"/>
+
+    <!-- Threshold configuration -->
+    <arg name="dose_threshold_usvh" default="10.0"/>
+    <arg name="alarm_hysteresis_usvh" default="1.0"/>
+    <arg name="verify_crc" default="false"/>
+
+    <node name="gamma_probe" pkg="jcs_gamma_probe" type="gamma_probe_node.py" output="screen">
+        <param name="port" value="$(arg port)"/>
+        <param name="baud_rate" value="$(arg baud_rate)"/>
+        <param name="tcp_host" value="$(arg tcp_host)"/>
+        <param name="tcp_port" value="$(arg tcp_port)"/>
+        <param name="dose_threshold_usvh" value="$(arg dose_threshold_usvh)"/>
+        <param name="alarm_hysteresis_usvh" value="$(arg alarm_hysteresis_usvh)"/>
+        <param name="verify_crc" value="$(arg verify_crc)"/>
+        <param name="frame_id" value="gamma_probe"/>
+    </node>
+</launch>
