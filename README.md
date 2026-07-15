@@ -50,7 +50,7 @@ $06,SSSS,HHHH,DDDDDDDDD.D*CCCC\r
 | `~baud_rate` | `9600` | Baud rate |
 | `~tcp_host` | `` (empty) | TCP bridge host (enables TCP mode when set) |
 | `~tcp_port` | `3241` | TCP bridge port |
-| `~dose_threshold_usvh` | `10.0` | Alarm threshold in µSv/h |
+| `~dose_threshold_usvh` | `150.0` | Alarm threshold in µSv/h (0.15 mSv/h) |
 | `~alarm_hysteresis_usvh` | `1.0` | Hysteresis band to clear alarm |
 | `~verify_crc` | `False` | Validate CRC-CCITT checksum |
 | `~frame_id` | `gamma_probe` | Frame ID for messages |
@@ -92,7 +92,7 @@ docker exec -it gamma_probe bash -c "source /catkin_ws/devel/setup.bash && rosto
 python plot_dose.py
 ```
 
-Displays real-time dose rate with a 200 µSv/h threshold and audible alarm.
+Displays real-time dose rate with a 150 µSv/h (0.15 mSv/h) threshold and audible alarm.
 
 ### Direct Serial Test
 
