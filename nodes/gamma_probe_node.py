@@ -17,13 +17,14 @@ Protocol (from probe at 1 Hz, no polling required):
 Parameters:
   ~port (str): Serial port (default: /dev/ttyUSB0, Windows e.g. COM3)
   ~baud_rate (int): Baud rate (default: 9600)
-  ~dose_threshold_usvh (float): Alarm threshold in uSv/h (default: 10.0)
+  ~dose_threshold_usvh (float): Alarm threshold in uSv/h (default: 150.0, i.e. 0.15 mSv/h)
   ~alarm_hysteresis_usvh (float): Hysteresis band below threshold to clear alarm (default: 1.0)
   ~verify_crc (bool): Whether to validate CRC-CCITT checksum (default: False)
   ~frame_id (str): Frame ID for published messages (default: gamma_probe)
 """
 from __future__ import print_function
 
+from collections import deque
 import socket
 import serial
 import rospy
@@ -54,7 +55,7 @@ class GammaProbeNode(object):
         self.baud_rate = rospy.get_param("~baud_rate", 9600)
         self.tcp_host = rospy.get_param("~tcp_host", "")
         self.tcp_port = rospy.get_param("~tcp_port", 3241)
-        self.threshold = rospy.get_param("~dose_threshold_usvh", 10.0)
+        self.threshold = rospy.get_param("~dose_threshold_usvh", 150.0)
         self.hysteresis = rospy.get_param("~alarm_hysteresis_usvh", 1.0)
         self.verify_crc = rospy.get_param("~verify_crc", False)
         self.frame_id = rospy.get_param("~frame_id", "gamma_probe")
@@ -62,9 +63,11 @@ class GammaProbeNode(object):
         # State
         self.alarm_active = False
         self.serial_conn = None
+        self.dose_buffer = deque(maxlen=10)  # 10-second averaging at 1 Hz
 
         # Publishers
         self.pub_dose = rospy.Publisher("~dose_rate", Float64, queue_size=10)
+        self.pub_dose_avg = rospy.Publisher("~dose_rate_avg", Float64, queue_size=10)
         self.pub_alarm = rospy.Publisher("~alarm", Bool, queue_size=10, latch=True)
         self.pub_diagnostics = rospy.Publisher("~diagnostics", DiagnosticStatus, queue_size=10)
         self.pub_raw = rospy.Publisher("~raw_message", String, queue_size=10)
@@ -234,6 +237,11 @@ class GammaProbeNode(object):
 
                 # Publish dose rate
                 self.pub_dose.publish(Float64(data=dose_rate))
+
+                # Publish 10-second average
+                self.dose_buffer.append(dose_rate)
+                avg_dose = sum(self.dose_buffer) / len(self.dose_buffer)
+                self.pub_dose_avg.publish(Float64(data=avg_dose))
 
                 # Evaluate threshold decision
                 new_alarm_state = self.evaluate_threshold(dose_rate)

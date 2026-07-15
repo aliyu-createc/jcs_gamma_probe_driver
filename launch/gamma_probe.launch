@@ -9,7 +9,7 @@
     <arg name="tcp_port" default="3241"/>
 
     <!-- Threshold configuration -->
-    <arg name="dose_threshold_usvh" default="10.0"/>
+    <arg name="dose_threshold_usvh" default="150.0"/>
     <arg name="alarm_hysteresis_usvh" default="1.0"/>
     <arg name="verify_crc" default="false"/>
 
