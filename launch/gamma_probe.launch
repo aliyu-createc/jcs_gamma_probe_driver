@@ -8,6 +8,17 @@
     <arg name="tcp_host" default=""/>
     <arg name="tcp_port" default="3241"/>
 
+    <!-- ADS is optional; requires Python 3, pyads, PLC symbols and a return route. -->
+    <arg name="ads_host" default=""/>
+    <arg name="ads_ams_net_id" default=""/>
+    <arg name="ads_local_ams_net_id" default=""/>
+    <arg name="ads_port" default="851"/>
+    <arg name="ads_message_symbol" default=""/>
+    <arg name="ads_counter_symbol" default=""/>
+    <arg name="ads_timeout_ms" default="2000"/>
+    <arg name="ads_poll_interval" default="0.1"/>
+    <arg name="ads_stale_timeout" default="5.0"/>
+
     <!-- Threshold configuration -->
     <arg name="dose_threshold_usvh" default="150.0"/>
     <arg name="alarm_hysteresis_usvh" default="1.0"/>
@@ -18,6 +29,15 @@
         <param name="baud_rate" value="$(arg baud_rate)"/>
         <param name="tcp_host" value="$(arg tcp_host)"/>
         <param name="tcp_port" value="$(arg tcp_port)"/>
+        <param name="ads_host" value="$(arg ads_host)" type="str"/>
+        <param name="ads_ams_net_id" value="$(arg ads_ams_net_id)" type="str"/>
+        <param name="ads_local_ams_net_id" value="$(arg ads_local_ams_net_id)" type="str"/>
+        <param name="ads_port" value="$(arg ads_port)" type="int"/>
+        <param name="ads_message_symbol" value="$(arg ads_message_symbol)" type="str"/>
+        <param name="ads_counter_symbol" value="$(arg ads_counter_symbol)" type="str"/>
+        <param name="ads_timeout_ms" value="$(arg ads_timeout_ms)" type="int"/>
+        <param name="ads_poll_interval" value="$(arg ads_poll_interval)" type="double"/>
+        <param name="ads_stale_timeout" value="$(arg ads_stale_timeout)" type="double"/>
         <param name="dose_threshold_usvh" value="$(arg dose_threshold_usvh)"/>
         <param name="alarm_hysteresis_usvh" value="$(arg alarm_hysteresis_usvh)"/>
         <param name="verify_crc" value="$(arg verify_crc)"/>

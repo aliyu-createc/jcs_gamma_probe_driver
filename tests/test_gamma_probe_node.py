@@ -15,6 +15,7 @@ import os
 import sys
 import types
 import unittest
+from unittest.mock import Mock, patch
 
 
 # --- Stubs, installed before importing the node ------------------------------
@@ -87,6 +88,7 @@ class FakeDiagnosticStatus(object):
     OK = 0
     WARN = 1
     ERROR = 2
+    STALE = 3
 
     def __init__(self):
         self.name = ""
@@ -405,6 +407,162 @@ class TestCrc(DriverOutputTest):
         published as a real reading. Manual 5.6.4 requires it to be enabled for any
         deployment where the dose rate is relied on operationally."""
         self.run_lines([frame(dose="000000012.5", crc="DEAD")])
+        self.assertEqual(self.doses(), [12.5])
+
+
+class TestAdsInput(DriverOutputTest):
+    def setUp(self):
+        self.ads = types.ModuleType("pyads")
+        self.ads.ADSError = type("ADSError", (Exception,), {})
+        self.ads.PLCTYPE_UDINT = "UDINT"
+        self.ads.PLCTYPE_STRING = "STRING"
+        self.ads.open_port = Mock()
+        self.ads.close_port = Mock()
+        self.ads.set_local_address = Mock()
+        self.plc = Mock()
+        self.ads.Connection = Mock(return_value=self.plc)
+        self.module_patch = patch.dict(sys.modules, {"pyads": self.ads})
+        self.module_patch.start()
+        self.addCleanup(self.module_patch.stop)
+        self.params = {
+            "~ads_host": "192.0.2.10",
+            "~ads_ams_net_id": "192.0.2.10.1.1",
+            "~ads_local_ams_net_id": "192.0.2.20.1.1",
+            "~ads_message_symbol": "GVL_Gamma.sRawMessage",
+            "~ads_counter_symbol": "GVL_Gamma.nRxSequence",
+            "~ads_poll_interval": 0.1,
+            "~ads_stale_timeout": 0.2,
+        }
+
+    def run_ads(self, reads, ticks, **overrides):
+        params = dict(self.params)
+        params.update(overrides)
+        node = self.make_node(**params)
+        self.plc.read_by_name.side_effect = reads
+        self.clock = 0.0
+        self.sleeps = []
+
+        def sleep(duration):
+            self.clock += duration
+            self.sleeps.append(duration)
+            if len(self.sleeps) >= ticks:
+                ROSPY.shutdown = True
+
+        with patch.object(gamma_probe_node.time, "monotonic",
+                          side_effect=lambda: self.clock), \
+                patch.object(gamma_probe_node.time, "sleep", side_effect=sleep):
+            node.run()
+        return node
+
+    def test_ads_uses_configured_endpoint_symbols_types_and_closes(self):
+        self.run_ads([0, 2, frame(), 2], 1)
+        self.assertEqual(self.doses(), [12.5])
+        self.ads.Connection.assert_called_once_with("192.0.2.10.1.1", 851, "192.0.2.10")
+        self.ads.set_local_address.assert_called_once_with("192.0.2.20.1.1")
+        self.ads.open_port.assert_called_once_with()
+        self.ads.close_port.assert_called_once_with()
+        self.plc.set_timeout.assert_called_once_with(2000)
+        self.assertEqual(self.plc.read_by_name.call_args_list[1].args,
+                         ("GVL_Gamma.nRxSequence", "UDINT"))
+        self.assertEqual(self.plc.read_by_name.call_args_list[2].args,
+                         ("GVL_Gamma.sRawMessage", "STRING"))
+        self.plc.close.assert_called_once_with()
+        self.assertEqual(self.raw.messages[0].data, frame().strip())
+        self.assertEqual(self.diagnostics.messages[-1].level, FakeDiagnosticStatus.OK)
+
+    def test_retained_value_is_not_published_at_startup(self):
+        self.run_ads([8, 8, frame(), 8], 1)
+        self.assertEqual(self.doses(), [])
+        self.assertEqual(self.raw.messages, [])
+        self.assertEqual(self.diagnostics.messages[-1].level, FakeDiagnosticStatus.STALE)
+
+    def test_counter_deduplicates_but_identical_fresh_readings_are_published(self):
+        self.run_ads([0, 2, frame(), 2, 2, frame(), 2, 4, frame(), 4], 3)
+        self.assertEqual(self.doses(), [12.5, 12.5])
+        self.assertEqual(len(self.dose_avg.messages), 2)
+
+    def test_odd_sequence_and_changed_snapshot_are_rejected(self):
+        self.run_ads([0, 1, 2, frame(), 4, 4, frame(), 4], 3)
+        self.assertEqual(self.doses(), [12.5])
+        self.assertEqual(len(self.raw.messages), 1)
+
+    def test_counter_wrap_is_a_new_sample(self):
+        self.run_ads([4294967294, 0, frame(), 0], 1)
+        self.assertEqual(self.doses(), [12.5])
+
+    def test_stale_data_at_exact_timeout_preserves_alarm_and_clears_average(self):
+        high = frame(dose="000000200.0")
+        self.run_ads([0, 2, high, 2, 2, high, 2, 2, high, 2], 3)
+        self.assertEqual(self.doses(), [200.0])
+        self.assertEqual(self.alarms(), [False, True])
+        self.assertEqual(self.diagnostics.messages[-1].level, FakeDiagnosticStatus.STALE)
+        self.assertEqual(list(self.node.dose_buffer), [])
+
+    def test_recovery_after_stale_starts_a_new_average_and_clears_alarm(self):
+        high = frame(dose="000000200.0")
+        self.run_ads([0, 2, high, 2, 2, high, 2, 2, high, 2, 4, frame(), 4], 4)
+        self.assertEqual(self.doses(), [200.0, 12.5])
+        self.assertEqual(self.dose_avg.messages[-1].data, 12.5)
+        self.assertEqual(self.alarms(), [False, True, False])
+        self.assertEqual(self.diagnostics.messages[-1].level, FakeDiagnosticStatus.OK)
+
+    def test_invalid_fresh_frames_do_not_prevent_stale_status(self):
+        self.run_ads([0, 2, "garbage", 2, 4, "garbage", 4, 6, "garbage", 6], 3)
+        self.assertEqual(self.doses(), [])
+        self.assertEqual(len(self.raw.messages), 3)
+        levels = [msg.level for msg in self.diagnostics.messages]
+        self.assertIn(FakeDiagnosticStatus.ERROR, levels)
+        self.assertEqual(levels[-1], FakeDiagnosticStatus.STALE)
+
+    def test_ads_reuses_crc_and_health_diagnostics(self):
+        self.run_ads([0, 2, frame(crc="DEAD"), 2,
+                      4, frame(health="1101", crc="auto"), 4], 2,
+                     **{"~verify_crc": True})
+        self.assertEqual(self.doses(), [12.5])
+        self.assertEqual(self.diagnostics.messages[-1].level, FakeDiagnosticStatus.WARN)
+
+    def test_read_failure_reconnects_without_republishing_retained_data(self):
+        self.run_ads([0, 2, frame(), 2, self.ads.ADSError("connection lost"),
+                      2, 2, frame(), 2, 4, frame(), 4], 4)
+        self.assertEqual(self.ads.Connection.call_count, 2)
+        self.assertEqual(self.plc.close.call_count, 2)
+        self.assertIn(5.0, self.sleeps)
+        self.assertEqual(self.doses(), [12.5, 12.5])
+        self.assertIn(FakeDiagnosticStatus.ERROR,
+                      [msg.level for msg in self.diagnostics.messages])
+
+    def test_open_failure_is_reported_and_connection_closed(self):
+        self.plc.open.side_effect = self.ads.ADSError("route missing")
+        self.run_ads([], 1)
+        self.assertEqual(self.doses(), [])
+        self.plc.close.assert_called_once_with()
+        self.assertEqual(self.diagnostics.messages[-1].level, FakeDiagnosticStatus.ERROR)
+
+    def test_invalid_configuration_fails_explicitly(self):
+        for overrides in (
+                {"~tcp_host": "bridge"},
+                {"~ads_ams_net_id": "192.0.2.10"},
+                {"~ads_local_ams_net_id": "999.0.2.20.1.1"},
+                {"~ads_message_symbol": ""},
+                {"~ads_counter_symbol": ""},
+                {"~ads_port": 0},
+                {"~ads_timeout_ms": -1},
+                {"~ads_poll_interval": float("nan")},
+                {"~ads_poll_interval": 0},
+                {"~ads_stale_timeout": -1}):
+            params = dict(self.params)
+            params.update(overrides)
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                self.make_node(**params)
+
+    def test_missing_optional_dependency_has_actionable_error(self):
+        with patch.dict(sys.modules, {"pyads": None}), \
+                self.assertRaisesRegex(ImportError, "requirements-ads.txt"):
+            self.make_node(**self.params)
+
+    def test_serial_mode_does_not_import_optional_pyads(self):
+        with patch.dict(sys.modules, {"pyads": None}):
+            self.run_lines([frame()])
         self.assertEqual(self.doses(), [12.5])
 
 

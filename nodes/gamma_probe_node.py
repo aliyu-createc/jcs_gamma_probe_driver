@@ -1,10 +1,9 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
 Gamma Probe Node - RMS30-102ASx ASCII Gamma Probe driver.
 
-Reads dose rate from a JCS RMS30-102ASx gamma probe connected via USB-to-RS485
-adapter. Publishes dose rate and raises alarm when a configurable threshold is
-exceeded.
+Reads dose rate from a JCS RMS30-102ASx gamma probe via serial, TCP, or PLC ADS.
+Publishes dose rate and raises alarm when a configurable threshold is exceeded.
 
 Protocol (from probe at 1 Hz, no polling required):
   $06,SSSS,HHHH,DDDDDDDDD.D*CCCC\r\n
@@ -25,7 +24,10 @@ Parameters:
 from __future__ import print_function
 
 from collections import deque
+import importlib
+import math
 import socket
+import time
 import serial
 import rospy
 from std_msgs.msg import Float64, Bool, String
@@ -55,6 +57,10 @@ class GammaProbeNode(object):
         self.baud_rate = rospy.get_param("~baud_rate", 9600)
         self.tcp_host = rospy.get_param("~tcp_host", "")
         self.tcp_port = rospy.get_param("~tcp_port", 3241)
+        self.ads_host = rospy.get_param("~ads_host", "")
+        self.ads = None
+        if self.ads_host:
+            self._configure_ads()
         self.threshold = rospy.get_param("~dose_threshold_usvh", 150.0)
         self.hysteresis = rospy.get_param("~alarm_hysteresis_usvh", 1.0)
         self.verify_crc = rospy.get_param("~verify_crc", False)
@@ -76,6 +82,106 @@ class GammaProbeNode(object):
         self.pub_alarm.publish(Bool(data=False))
 
         rospy.loginfo("Gamma probe node: port=%s, threshold=%.1f uSv/h", self.port, self.threshold)
+
+    def _configure_ads(self):
+        if self.tcp_host:
+            raise ValueError("Set only one of ads_host and tcp_host")
+        self.ads_ams_net_id = rospy.get_param("~ads_ams_net_id", "")
+        self.ads_local_ams_net_id = rospy.get_param("~ads_local_ams_net_id", "")
+        self.ads_message_symbol = rospy.get_param("~ads_message_symbol", "")
+        self.ads_counter_symbol = rospy.get_param("~ads_counter_symbol", "")
+        for name in ("ads_ams_net_id", "ads_local_ams_net_id"):
+            parts = getattr(self, name).split(".")
+            if len(parts) != 6 or not all(
+                    part.isdigit() and 0 <= int(part) <= 255 for part in parts):
+                raise ValueError("%s must contain six decimal bytes" % name)
+        if not self.ads_message_symbol or not self.ads_counter_symbol:
+            raise ValueError("ADS requires message and counter symbol names")
+        self.ads_port = rospy.get_param("~ads_port", 851)
+        self.ads_timeout_ms = rospy.get_param("~ads_timeout_ms", 2000)
+        self.ads_poll_interval = rospy.get_param("~ads_poll_interval", 0.1)
+        self.ads_stale_timeout = rospy.get_param("~ads_stale_timeout", 5.0)
+        for name, upper in (("ads_port", 65535), ("ads_timeout_ms", 2147483647)):
+            value = getattr(self, name)
+            if type(value) is not int or not 1 <= value <= upper:
+                raise ValueError("%s must be an integer in [1, %d]" % (name, upper))
+        for name in ("ads_poll_interval", "ads_stale_timeout"):
+            value = getattr(self, name)
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value <= 0):
+                raise ValueError("%s must be finite and positive" % name)
+        try:
+            self.ads = importlib.import_module("pyads")
+        except ImportError as e:
+            raise ImportError(
+                "ADS mode requires Python 3 and pyads; install requirements-ads.txt"
+            ) from e
+
+    def _read_ads_sample(self, plc):
+        before = plc.read_by_name(self.ads_counter_symbol, self.ads.PLCTYPE_UDINT)
+        if before % 2:
+            return None
+        message = plc.read_by_name(self.ads_message_symbol, self.ads.PLCTYPE_STRING)
+        after = plc.read_by_name(self.ads_counter_symbol, self.ads.PLCTYPE_UDINT)
+        if before != after:
+            rospy.logwarn_throttle(10.0, "PLC message changed during ADS read; retrying")
+            return None
+        return after, message
+
+    def _publish_ads_status(self, level, message):
+        diag = DiagnosticStatus()
+        diag.name = "gamma_probe/ads"
+        diag.hardware_id = self.ads_ams_net_id
+        diag.level = level
+        diag.message = message
+        self.pub_diagnostics.publish(diag)
+
+    def _run_ads(self):
+        # Set the Linux AdsLib identity before creating the route to the PLC.
+        self.ads.open_port()
+        try:
+            self.ads.set_local_address(self.ads_local_ams_net_id)
+        finally:
+            self.ads.close_port()
+        while not rospy.is_shutdown():
+            plc = None
+            try:
+                self._publish_ads_status(DiagnosticStatus.STALE, "Waiting for fresh PLC data")
+                plc = self.ads.Connection(self.ads_ams_net_id, self.ads_port, self.ads_host)
+                plc.open()
+                plc.set_timeout(self.ads_timeout_ms)
+                # Never publish a retained value at startup or after reconnect.
+                sequence = plc.read_by_name(self.ads_counter_symbol, self.ads.PLCTYPE_UDINT)
+                last_valid = time.monotonic()
+                self.dose_buffer.clear()
+                rospy.loginfo("Connected to ADS %s:%d", self.ads_host, self.ads_port)
+                while not rospy.is_shutdown():
+                    sample = self._read_ads_sample(plc)
+                    if sample is not None and sample[0] != sequence:
+                        sequence, message = sample
+                        if self.process_message(message):
+                            last_valid = time.monotonic()
+                        else:
+                            rospy.logwarn_throttle(10.0, "Invalid probe frame from PLC")
+                            self._publish_ads_status(
+                                DiagnosticStatus.ERROR, "Invalid probe frame from PLC")
+                    if time.monotonic() - last_valid >= self.ads_stale_timeout:
+                        rospy.logwarn_throttle(10.0, "No fresh valid probe data from PLC")
+                        self._publish_ads_status(
+                            DiagnosticStatus.STALE, "No fresh valid probe data from PLC")
+                        self.dose_buffer.clear()
+                    time.sleep(self.ads_poll_interval)
+            except (self.ads.ADSError, OSError) as e:
+                rospy.logerr("ADS read/connection failed: %s. Retrying in 5 seconds", e)
+                self._publish_ads_status(DiagnosticStatus.ERROR, "ADS connection/read failed: %s" % e)
+            finally:
+                if plc is not None:
+                    try:
+                        plc.close()
+                    except (self.ads.ADSError, OSError) as e:
+                        rospy.logerr("ADS connection cleanup failed: %s", e)
+            if not rospy.is_shutdown():
+                time.sleep(5.0)
 
     def connect(self):
         """Open serial or TCP connection to the probe."""
@@ -204,8 +310,35 @@ class GammaProbeNode(object):
 
         self.pub_diagnostics.publish(diag)
 
+    def process_message(self, raw_line):
+        self.pub_raw.publish(String(data=raw_line.strip()))
+        result = self.parse_message(raw_line)
+        if result is None:
+            return False
+
+        serial_number, health, dose_rate = result
+        self.pub_dose.publish(Float64(data=dose_rate))
+        self.dose_buffer.append(dose_rate)
+        avg_dose = sum(self.dose_buffer) / len(self.dose_buffer)
+        self.pub_dose_avg.publish(Float64(data=avg_dose))
+
+        new_alarm_state = self.evaluate_threshold(dose_rate)
+        if new_alarm_state != self.alarm_active:
+            self.alarm_active = new_alarm_state
+            self.pub_alarm.publish(Bool(data=self.alarm_active))
+            if self.alarm_active:
+                rospy.logwarn("ALARM: Dose rate %.1f uSv/h exceeds threshold %.1f uSv/h",
+                              dose_rate, self.threshold)
+            else:
+                rospy.loginfo("ALARM CLEARED: Dose rate %.1f uSv/h below threshold", dose_rate)
+        self.publish_diagnostics(serial_number, health, dose_rate)
+        return True
+
     def run(self):
         """Main loop: read serial data, parse, publish, and evaluate threshold."""
+        if self.ads_host:
+            self._run_ads()
+            return
         while not rospy.is_shutdown():
             if not self.connect():
                 rospy.logwarn("Retrying connection in 5 seconds...")
@@ -227,35 +360,7 @@ class GammaProbeNode(object):
                     rospy.logwarn_throttle(10.0, "No data from gamma probe (timeout)")
                     continue
 
-                self.pub_raw.publish(String(data=raw_line.strip()))
-
-                result = self.parse_message(raw_line)
-                if result is None:
-                    continue
-
-                serial_number, health, dose_rate = result
-
-                # Publish dose rate
-                self.pub_dose.publish(Float64(data=dose_rate))
-
-                # Publish 10-second average
-                self.dose_buffer.append(dose_rate)
-                avg_dose = sum(self.dose_buffer) / len(self.dose_buffer)
-                self.pub_dose_avg.publish(Float64(data=avg_dose))
-
-                # Evaluate threshold decision
-                new_alarm_state = self.evaluate_threshold(dose_rate)
-                if new_alarm_state != self.alarm_active:
-                    self.alarm_active = new_alarm_state
-                    self.pub_alarm.publish(Bool(data=self.alarm_active))
-                    if self.alarm_active:
-                        rospy.logwarn("ALARM: Dose rate %.1f uSv/h exceeds threshold %.1f uSv/h",
-                                     dose_rate, self.threshold)
-                    else:
-                        rospy.loginfo("ALARM CLEARED: Dose rate %.1f uSv/h below threshold", dose_rate)
-
-                # Publish diagnostics
-                self.publish_diagnostics(serial_number, health, dose_rate)
+                self.process_message(raw_line)
 
             # Connection lost - clean up
             if self.tcp_host:
@@ -274,3 +379,6 @@ if __name__ == "__main__":
         node.run()
     except rospy.ROSInterruptException:
         pass
+    except (ValueError, ImportError) as e:
+        rospy.logfatal("Gamma probe startup failed: %s", e)
+        raise
