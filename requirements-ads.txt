@@ -1,0 +1,4 @@
+# Optional dependency for Beckhoff PLC ADS mode (Linux, Python 3).
+# Python 3.8 (ROS Noetic) requires pyads 3.3.9; newer pyads releases need newer Python.
+pyads==3.3.9; python_version < "3.9"
+pyads>=3.4; python_version >= "3.9"
