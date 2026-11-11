@@ -24,6 +24,9 @@
     <arg name="alarm_hysteresis_usvh" default="1.0"/>
     <arg name="verify_crc" default="false"/>
 
+    <!-- Frame ID for published messages; override per probe in multi-probe setups. -->
+    <arg name="frame_id" default="gamma_probe"/>
+
     <node name="gamma_probe" pkg="jcs_gamma_probe" type="gamma_probe_node.py" output="screen">
         <param name="port" value="$(arg port)"/>
         <param name="baud_rate" value="$(arg baud_rate)"/>
@@ -41,6 +44,6 @@
         <param name="dose_threshold_usvh" value="$(arg dose_threshold_usvh)"/>
         <param name="alarm_hysteresis_usvh" value="$(arg alarm_hysteresis_usvh)"/>
         <param name="verify_crc" value="$(arg verify_crc)"/>
-        <param name="frame_id" value="gamma_probe"/>
+        <param name="frame_id" value="$(arg frame_id)"/>
     </node>
 </launch>

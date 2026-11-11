@@ -130,7 +130,8 @@ class GammaProbeNode(object):
 
     def _publish_ads_status(self, level, message):
         diag = DiagnosticStatus()
-        diag.name = "gamma_probe/ads"
+        # Node name distinguishes probes when several nodes share one PLC.
+        diag.name = "%s/ads" % rospy.get_name().lstrip("/")
         diag.hardware_id = self.ads_ams_net_id
         diag.level = level
         diag.message = message

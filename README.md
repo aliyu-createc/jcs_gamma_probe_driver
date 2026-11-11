@@ -33,6 +33,7 @@ $06,SSSS,HHHH,DDDDDDDDD.D*CCCC\r
 | `Dockerfile` | Builds a self-contained ROS Noetic container |
 | `entrypoint.sh` | Docker entrypoint script |
 | `launch/gamma_probe.launch` | ROS launch file with configurable parameters |
+| `launch/gamma_probes_ads.launch` | Launches four probe nodes reading one PLC over ADS |
 
 ## ROS Topics
 
@@ -227,6 +228,50 @@ roslaunch jcs_gamma_probe gamma_probe.launch \
 
 No serial bridge or USB adapter on the PC is needed. The existing Docker image
 does not install the optional ADS dependency.
+
+### Running four probes through one PLC
+
+`gamma_probes_ads.launch` starts four independent probe nodes in namespaces
+`/probe_1` … `/probe_4`, all reading the same PLC. Requirements:
+
+- The PLC must expose **one STRING/UDINT symbol pair per probe**, each following
+  the single-writer sequence contract above (e.g. `GVL_Gamma.sRawMessage1` /
+  `GVL_Gamma.nRxSequence1` … `4`). Each pair must be written only from its own
+  probe's receiver.
+- Each node process runs its own AdsLib router, and AMS Net IDs must be unique
+  per router. Agree **four distinct client AMS Net IDs** with the PLC engineer
+  and have a **PLC-side return route for each one** (all four can point at the
+  same client IP address).
+
+```bash
+roslaunch jcs_gamma_probe gamma_probes_ads.launch \
+    ads_host:=<PLC_IP> \
+    ads_ams_net_id:=<PLC_AMS_NET_ID> \
+    probe1_local_ams_net_id:=<CLIENT_AMS_NET_ID_1> \
+    probe1_message_symbol:=GVL_Gamma.sRawMessage1 \
+    probe1_counter_symbol:=GVL_Gamma.nRxSequence1 \
+    probe2_local_ams_net_id:=<CLIENT_AMS_NET_ID_2> \
+    probe2_message_symbol:=GVL_Gamma.sRawMessage2 \
+    probe2_counter_symbol:=GVL_Gamma.nRxSequence2 \
+    probe3_local_ams_net_id:=<CLIENT_AMS_NET_ID_3> \
+    probe3_message_symbol:=GVL_Gamma.sRawMessage3 \
+    probe3_counter_symbol:=GVL_Gamma.nRxSequence3 \
+    probe4_local_ams_net_id:=<CLIENT_AMS_NET_ID_4> \
+    probe4_message_symbol:=GVL_Gamma.sRawMessage4 \
+    probe4_counter_symbol:=GVL_Gamma.nRxSequence4 \
+    verify_crc:=true
+```
+
+Alarm thresholds, timeouts and polling are shared launch arguments; edit the
+launch file if a probe needs individual values. Each probe publishes under its
+namespace, with message `frame_id` set to `gamma_probe_1` … `gamma_probe_4`:
+
+```bash
+rostopic echo /probe_1/gamma_probe/dose_rate
+rostopic echo /probe_1/gamma_probe/diagnostics
+rostopic echo /probe_2/gamma_probe/dose_rate
+...
+```
 
 ### Freshness, diagnostics and alarms
 

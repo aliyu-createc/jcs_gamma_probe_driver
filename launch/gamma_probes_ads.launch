@@ -1,0 +1,104 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Four gamma probes read through one Beckhoff PLC over ADS.
+         Each probe runs as an independent node in its own namespace
+         (/probe_1 ... /probe_4) with its own PLC symbol pair.
+
+         Each node process runs its own AdsLib router, and AMS Net IDs must be
+         unique per router: every probe needs its OWN client AMS Net ID and its
+         own PLC-side return route. Do not reuse one client AMS Net ID. -->
+
+    <!-- Shared PLC connection settings -->
+    <arg name="ads_host"/>
+    <arg name="ads_ams_net_id"/>
+    <arg name="ads_port" default="851"/>
+    <arg name="ads_timeout_ms" default="2000"/>
+    <arg name="ads_poll_interval" default="0.1"/>
+    <arg name="ads_stale_timeout" default="5.0"/>
+
+    <!-- Shared alarm settings -->
+    <arg name="dose_threshold_usvh" default="150.0"/>
+    <arg name="alarm_hysteresis_usvh" default="1.0"/>
+    <arg name="verify_crc" default="false"/>
+
+    <!-- Per-probe settings: unique client AMS Net ID and PLC symbol pair -->
+    <arg name="probe1_local_ams_net_id"/>
+    <arg name="probe1_message_symbol"/>
+    <arg name="probe1_counter_symbol"/>
+
+    <arg name="probe2_local_ams_net_id"/>
+    <arg name="probe2_message_symbol"/>
+    <arg name="probe2_counter_symbol"/>
+
+    <arg name="probe3_local_ams_net_id"/>
+    <arg name="probe3_message_symbol"/>
+    <arg name="probe3_counter_symbol"/>
+
+    <arg name="probe4_local_ams_net_id"/>
+    <arg name="probe4_message_symbol"/>
+    <arg name="probe4_counter_symbol"/>
+
+    <include file="$(find jcs_gamma_probe)/launch/gamma_probe.launch" ns="probe_1">
+        <arg name="ads_host" value="$(arg ads_host)"/>
+        <arg name="ads_ams_net_id" value="$(arg ads_ams_net_id)"/>
+        <arg name="ads_local_ams_net_id" value="$(arg probe1_local_ams_net_id)"/>
+        <arg name="ads_port" value="$(arg ads_port)"/>
+        <arg name="ads_message_symbol" value="$(arg probe1_message_symbol)"/>
+        <arg name="ads_counter_symbol" value="$(arg probe1_counter_symbol)"/>
+        <arg name="ads_timeout_ms" value="$(arg ads_timeout_ms)"/>
+        <arg name="ads_poll_interval" value="$(arg ads_poll_interval)"/>
+        <arg name="ads_stale_timeout" value="$(arg ads_stale_timeout)"/>
+        <arg name="dose_threshold_usvh" value="$(arg dose_threshold_usvh)"/>
+        <arg name="alarm_hysteresis_usvh" value="$(arg alarm_hysteresis_usvh)"/>
+        <arg name="verify_crc" value="$(arg verify_crc)"/>
+        <arg name="frame_id" value="gamma_probe_1"/>
+    </include>
+
+    <include file="$(find jcs_gamma_probe)/launch/gamma_probe.launch" ns="probe_2">
+        <arg name="ads_host" value="$(arg ads_host)"/>
+        <arg name="ads_ams_net_id" value="$(arg ads_ams_net_id)"/>
+        <arg name="ads_local_ams_net_id" value="$(arg probe2_local_ams_net_id)"/>
+        <arg name="ads_port" value="$(arg ads_port)"/>
+        <arg name="ads_message_symbol" value="$(arg probe2_message_symbol)"/>
+        <arg name="ads_counter_symbol" value="$(arg probe2_counter_symbol)"/>
+        <arg name="ads_timeout_ms" value="$(arg ads_timeout_ms)"/>
+        <arg name="ads_poll_interval" value="$(arg ads_poll_interval)"/>
+        <arg name="ads_stale_timeout" value="$(arg ads_stale_timeout)"/>
+        <arg name="dose_threshold_usvh" value="$(arg dose_threshold_usvh)"/>
+        <arg name="alarm_hysteresis_usvh" value="$(arg alarm_hysteresis_usvh)"/>
+        <arg name="verify_crc" value="$(arg verify_crc)"/>
+        <arg name="frame_id" value="gamma_probe_2"/>
+    </include>
+
+    <include file="$(find jcs_gamma_probe)/launch/gamma_probe.launch" ns="probe_3">
+        <arg name="ads_host" value="$(arg ads_host)"/>
+        <arg name="ads_ams_net_id" value="$(arg ads_ams_net_id)"/>
+        <arg name="ads_local_ams_net_id" value="$(arg probe3_local_ams_net_id)"/>
+        <arg name="ads_port" value="$(arg ads_port)"/>
+        <arg name="ads_message_symbol" value="$(arg probe3_message_symbol)"/>
+        <arg name="ads_counter_symbol" value="$(arg probe3_counter_symbol)"/>
+        <arg name="ads_timeout_ms" value="$(arg ads_timeout_ms)"/>
+        <arg name="ads_poll_interval" value="$(arg ads_poll_interval)"/>
+        <arg name="ads_stale_timeout" value="$(arg ads_stale_timeout)"/>
+        <arg name="dose_threshold_usvh" value="$(arg dose_threshold_usvh)"/>
+        <arg name="alarm_hysteresis_usvh" value="$(arg alarm_hysteresis_usvh)"/>
+        <arg name="verify_crc" value="$(arg verify_crc)"/>
+        <arg name="frame_id" value="gamma_probe_3"/>
+    </include>
+
+    <include file="$(find jcs_gamma_probe)/launch/gamma_probe.launch" ns="probe_4">
+        <arg name="ads_host" value="$(arg ads_host)"/>
+        <arg name="ads_ams_net_id" value="$(arg ads_ams_net_id)"/>
+        <arg name="ads_local_ams_net_id" value="$(arg probe4_local_ams_net_id)"/>
+        <arg name="ads_port" value="$(arg ads_port)"/>
+        <arg name="ads_message_symbol" value="$(arg probe4_message_symbol)"/>
+        <arg name="ads_counter_symbol" value="$(arg probe4_counter_symbol)"/>
+        <arg name="ads_timeout_ms" value="$(arg ads_timeout_ms)"/>
+        <arg name="ads_poll_interval" value="$(arg ads_poll_interval)"/>
+        <arg name="ads_stale_timeout" value="$(arg ads_stale_timeout)"/>
+        <arg name="dose_threshold_usvh" value="$(arg dose_threshold_usvh)"/>
+        <arg name="alarm_hysteresis_usvh" value="$(arg alarm_hysteresis_usvh)"/>
+        <arg name="verify_crc" value="$(arg verify_crc)"/>
+        <arg name="frame_id" value="gamma_probe_4"/>
+    </include>
+</launch>

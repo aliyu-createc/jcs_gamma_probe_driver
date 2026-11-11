@@ -52,6 +52,9 @@ class FakeRospy(types.ModuleType):
     def init_node(self, *args, **kwargs):
         pass
 
+    def get_name(self):
+        return "/gamma_probe"
+
     def get_param(self, name, default=None):
         return self.params.get(name, default)
 
