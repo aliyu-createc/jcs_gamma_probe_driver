@@ -18,8 +18,12 @@ Parameters:
   ~baud_rate (int): Baud rate (default: 9600)
   ~dose_threshold_usvh (float): Alarm threshold in uSv/h (default: 150.0, i.e. 0.15 mSv/h)
   ~alarm_hysteresis_usvh (float): Hysteresis band below threshold to clear alarm (default: 1.0)
+  ~probe_name (str): Human-readable label (default: Gamma Probe)
+  ~calibration_factor (float): Positive multiplier applied before averaging and alarms (default: 1.0)
   ~verify_crc (bool): Whether to validate CRC-CCITT checksum (default: False)
   ~frame_id (str): Frame ID for published messages (default: gamma_probe)
+  ~shared_ads (bool): Read four configured namespaces over one ADS connection (default: False)
+  ~connection (dict): Common ADS settings required in shared mode
 """
 from __future__ import print_function
 
@@ -35,8 +39,8 @@ from diagnostic_msgs.msg import DiagnosticStatus, KeyValue
 
 
 def crc_ccitt(data):
-    """Compute CRC-CCITT (0xFFFF initial) over a byte string."""
-    crc = 0xFFFF
+    """Compute probe CRC-CCITT (0x1021 polynomial, 0x1D0F initial)."""
+    crc = 0x1D0F
     for byte in bytearray(data.encode('ascii') if isinstance(data, str) else data):
         crc ^= byte << 8
         for _ in range(8):
@@ -49,22 +53,36 @@ def crc_ccitt(data):
 
 
 class GammaProbeNode(object):
-    def __init__(self):
-        rospy.init_node("gamma_probe_node")
-
+    def __init__(self, namespace="~", ads_connection=None):
+        self.parameter_prefix = "~" if namespace == "~" else namespace.rstrip("/") + "/"
+        self.diagnostic_name = rospy.get_name() if namespace == "~" else namespace
         # Parameters
-        self.port = rospy.get_param("~port", "/dev/ttyUSB0")
-        self.baud_rate = rospy.get_param("~baud_rate", 9600)
-        self.tcp_host = rospy.get_param("~tcp_host", "")
-        self.tcp_port = rospy.get_param("~tcp_port", 3241)
-        self.ads_host = rospy.get_param("~ads_host", "")
+        self.port = self._get_param("port", "/dev/ttyUSB0")
+        self.baud_rate = self._get_param("baud_rate", 9600)
+        self.tcp_host = self._get_param("tcp_host", "")
+        self.tcp_port = self._get_param("tcp_port", 3241)
+        self.ads_host = (ads_connection.get("ads_host", "") if ads_connection is not None
+                         else self._get_param("ads_host", ""))
         self.ads = None
         if self.ads_host:
-            self._configure_ads()
-        self.threshold = rospy.get_param("~dose_threshold_usvh", 150.0)
-        self.hysteresis = rospy.get_param("~alarm_hysteresis_usvh", 1.0)
-        self.verify_crc = rospy.get_param("~verify_crc", False)
-        self.frame_id = rospy.get_param("~frame_id", "gamma_probe")
+            self._configure_ads(ads_connection)
+        self.threshold = self._get_param("dose_threshold_usvh", 150.0)
+        self.hysteresis = self._get_param("alarm_hysteresis_usvh", 1.0)
+        self.probe_name = self._get_param("probe_name", "Gamma Probe")
+        self.calibration_factor = self._get_param("calibration_factor", 1.0)
+        if not isinstance(self.probe_name, str) or not self.probe_name.strip():
+            raise ValueError("probe_name must be a non-empty string")
+        for name, value in (("dose_threshold_usvh", self.threshold),
+                            ("alarm_hysteresis_usvh", self.hysteresis),
+                            ("calibration_factor", self.calibration_factor)):
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0
+                    or (name == "calibration_factor" and value == 0)):
+                raise ValueError("%s must be finite and %s" % (
+                    name, "positive" if name == "calibration_factor" else "non-negative",
+                ))
+        self.verify_crc = self._get_param("verify_crc", False)
+        self.frame_id = self._get_param("frame_id", "gamma_probe")
 
         # State
         self.alarm_active = False
@@ -72,24 +90,30 @@ class GammaProbeNode(object):
         self.dose_buffer = deque(maxlen=10)  # 10-second averaging at 1 Hz
 
         # Publishers
-        self.pub_dose = rospy.Publisher("~dose_rate", Float64, queue_size=10)
-        self.pub_dose_avg = rospy.Publisher("~dose_rate_avg", Float64, queue_size=10)
-        self.pub_alarm = rospy.Publisher("~alarm", Bool, queue_size=10, latch=True)
-        self.pub_diagnostics = rospy.Publisher("~diagnostics", DiagnosticStatus, queue_size=10)
-        self.pub_raw = rospy.Publisher("~raw_message", String, queue_size=10)
+        self.pub_dose = rospy.Publisher(self.parameter_prefix + "dose_rate", Float64, queue_size=10)
+        self.pub_dose_avg = rospy.Publisher(self.parameter_prefix + "dose_rate_avg", Float64, queue_size=10)
+        self.pub_alarm = rospy.Publisher(self.parameter_prefix + "alarm", Bool, queue_size=10, latch=True)
+        self.pub_diagnostics = rospy.Publisher(
+            self.parameter_prefix + "diagnostics", DiagnosticStatus, queue_size=10)
+        self.pub_raw = rospy.Publisher(self.parameter_prefix + "raw_message", String, queue_size=10)
 
         # Publish initial non-alarm state
         self.pub_alarm.publish(Bool(data=False))
 
-        rospy.loginfo("Gamma probe node: port=%s, threshold=%.1f uSv/h", self.port, self.threshold)
+        rospy.loginfo("%s: port=%s, threshold=%s uSv/h, calibration_factor=%s",
+                      self.probe_name, self.port, self.threshold, self.calibration_factor)
 
-    def _configure_ads(self):
+    def _get_param(self, name, default):
+        return rospy.get_param(self.parameter_prefix + name, default)
+
+    def _configure_ads(self, connection=None):
         if self.tcp_host:
             raise ValueError("Set only one of ads_host and tcp_host")
-        self.ads_ams_net_id = rospy.get_param("~ads_ams_net_id", "")
-        self.ads_local_ams_net_id = rospy.get_param("~ads_local_ams_net_id", "")
-        self.ads_message_symbol = rospy.get_param("~ads_message_symbol", "")
-        self.ads_counter_symbol = rospy.get_param("~ads_counter_symbol", "")
+        get_connection_param = connection.get if connection is not None else self._get_param
+        self.ads_ams_net_id = get_connection_param("ads_ams_net_id", "")
+        self.ads_local_ams_net_id = get_connection_param("ads_local_ams_net_id", "")
+        self.ads_message_symbol = self._get_param("ads_message_symbol", "")
+        self.ads_counter_symbol = self._get_param("ads_counter_symbol", "")
         for name in ("ads_ams_net_id", "ads_local_ams_net_id"):
             parts = getattr(self, name).split(".")
             if len(parts) != 6 or not all(
@@ -97,10 +121,10 @@ class GammaProbeNode(object):
                 raise ValueError("%s must contain six decimal bytes" % name)
         if not self.ads_message_symbol or not self.ads_counter_symbol:
             raise ValueError("ADS requires message and counter symbol names")
-        self.ads_port = rospy.get_param("~ads_port", 851)
-        self.ads_timeout_ms = rospy.get_param("~ads_timeout_ms", 2000)
-        self.ads_poll_interval = rospy.get_param("~ads_poll_interval", 0.1)
-        self.ads_stale_timeout = rospy.get_param("~ads_stale_timeout", 5.0)
+        self.ads_port = get_connection_param("ads_port", 851)
+        self.ads_timeout_ms = get_connection_param("ads_timeout_ms", 2000)
+        self.ads_poll_interval = get_connection_param("ads_poll_interval", 0.1)
+        self.ads_stale_timeout = get_connection_param("ads_stale_timeout", 5.0)
         for name, upper in (("ads_port", 65535), ("ads_timeout_ms", 2147483647)):
             value = getattr(self, name)
             if type(value) is not int or not 1 <= value <= upper:
@@ -130,14 +154,14 @@ class GammaProbeNode(object):
 
     def _publish_ads_status(self, level, message):
         diag = DiagnosticStatus()
-        # Node name distinguishes probes when several nodes share one PLC.
-        diag.name = "%s/ads" % rospy.get_name().lstrip("/")
+        diag.name = "%s/ads" % self.diagnostic_name.lstrip("/")
         diag.hardware_id = self.ads_ams_net_id
         diag.level = level
         diag.message = message
         self.pub_diagnostics.publish(diag)
 
-    def _run_ads(self):
+    def _run_ads(self, probes=None):
+        probes = [self] if probes is None else probes
         # Set the Linux AdsLib identity before creating the route to the PLC.
         self.ads.open_port()
         try:
@@ -147,34 +171,45 @@ class GammaProbeNode(object):
         while not rospy.is_shutdown():
             plc = None
             try:
-                self._publish_ads_status(DiagnosticStatus.STALE, "Waiting for fresh PLC data")
+                for probe in probes:
+                    probe._publish_ads_status(DiagnosticStatus.STALE, "Waiting for fresh PLC data")
                 plc = self.ads.Connection(self.ads_ams_net_id, self.ads_port, self.ads_host)
                 plc.open()
                 plc.set_timeout(self.ads_timeout_ms)
                 # Never publish a retained value at startup or after reconnect.
-                sequence = plc.read_by_name(self.ads_counter_symbol, self.ads.PLCTYPE_UDINT)
-                last_valid = time.monotonic()
-                self.dose_buffer.clear()
-                rospy.loginfo("Connected to ADS %s:%d", self.ads_host, self.ads_port)
+                sequences = {
+                    probe: plc.read_by_name(probe.ads_counter_symbol, self.ads.PLCTYPE_UDINT)
+                    for probe in probes
+                }
+                last_valid = {probe: time.monotonic() for probe in probes}
+                for probe in probes:
+                    probe.dose_buffer.clear()
+                rospy.loginfo("Connected to ADS %s:%d for %d probe(s)",
+                              self.ads_host, self.ads_port, len(probes))
                 while not rospy.is_shutdown():
-                    sample = self._read_ads_sample(plc)
-                    if sample is not None and sample[0] != sequence:
-                        sequence, message = sample
-                        if self.process_message(message):
-                            last_valid = time.monotonic()
-                        else:
-                            rospy.logwarn_throttle(10.0, "Invalid probe frame from PLC")
-                            self._publish_ads_status(
-                                DiagnosticStatus.ERROR, "Invalid probe frame from PLC")
-                    if time.monotonic() - last_valid >= self.ads_stale_timeout:
-                        rospy.logwarn_throttle(10.0, "No fresh valid probe data from PLC")
-                        self._publish_ads_status(
-                            DiagnosticStatus.STALE, "No fresh valid probe data from PLC")
-                        self.dose_buffer.clear()
+                    for probe in probes:
+                        sample = probe._read_ads_sample(plc)
+                        if sample is not None and sample[0] != sequences[probe]:
+                            sequences[probe], message = sample
+                            if probe.process_message(message):
+                                last_valid[probe] = time.monotonic()
+                            else:
+                                rospy.logwarn_throttle(
+                                    10.0, "Invalid probe frame from PLC: %s" % probe.probe_name)
+                                probe._publish_ads_status(
+                                    DiagnosticStatus.ERROR, "Invalid probe frame from PLC")
+                        if time.monotonic() - last_valid[probe] >= probe.ads_stale_timeout:
+                            rospy.logwarn_throttle(
+                                10.0, "No fresh valid probe data from PLC: %s" % probe.probe_name)
+                            probe._publish_ads_status(
+                                DiagnosticStatus.STALE, "No fresh valid probe data from PLC")
+                            probe.dose_buffer.clear()
                     time.sleep(self.ads_poll_interval)
             except (self.ads.ADSError, OSError) as e:
                 rospy.logerr("ADS read/connection failed: %s. Retrying in 5 seconds", e)
-                self._publish_ads_status(DiagnosticStatus.ERROR, "ADS connection/read failed: %s" % e)
+                for probe in probes:
+                    probe._publish_ads_status(
+                        DiagnosticStatus.ERROR, "ADS connection/read failed: %s" % e)
             finally:
                 if plc is not None:
                     try:
@@ -237,15 +272,15 @@ class GammaProbeNode(object):
         payload_part, crc_part = line.rsplit('*', 1)
 
         # Optional CRC verification
-        if self.verify_crc and len(crc_part) == 4:
+        if self.verify_crc:
+            if len(crc_part) != 4 or any(
+                    char not in "0123456789abcdefABCDEF" for char in crc_part):
+                rospy.logwarn("Invalid CRC hex: %s", crc_part)
+                return None
             # CRC is computed over payload including '$' up to and including '*'
             crc_data = payload_part + '*'
             expected_crc = crc_ccitt(crc_data)
-            try:
-                received_crc = int(crc_part, 16)
-            except ValueError:
-                rospy.logwarn("Invalid CRC hex: %s", crc_part)
-                return None
+            received_crc = int(crc_part, 16)
             if expected_crc != received_crc:
                 rospy.logwarn("CRC mismatch: expected %04X, got %04X", expected_crc, received_crc)
                 return None
@@ -298,6 +333,9 @@ class GammaProbeNode(object):
 
         diag.values.append(KeyValue(key="dose_rate_usvh", value="%.1f" % dose_rate))
         diag.values.append(KeyValue(key="alarm_active", value=str(self.alarm_active)))
+        diag.values.append(KeyValue(key="probe_name", value=self.probe_name))
+        diag.values.append(KeyValue(key="calibration_factor", value=str(self.calibration_factor)))
+        diag.values.append(KeyValue(key="dose_threshold_usvh", value=str(self.threshold)))
 
         if not all_ok:
             diag.level = DiagnosticStatus.WARN
@@ -318,9 +356,16 @@ class GammaProbeNode(object):
             return False
 
         serial_number, health, dose_rate = result
-        self.pub_dose.publish(Float64(data=dose_rate))
+        dose_rate *= self.calibration_factor
+        if not math.isfinite(dose_rate):
+            rospy.logerr("Non-finite corrected dose for %s; frame rejected", self.probe_name)
+            return False
         self.dose_buffer.append(dose_rate)
-        avg_dose = sum(self.dose_buffer) / len(self.dose_buffer)
+        avg_dose = sum(value / len(self.dose_buffer) for value in self.dose_buffer)
+        if not math.isfinite(avg_dose):
+            rospy.logerr("Non-finite corrected average for %s; frame rejected", self.probe_name)
+            return False
+        self.pub_dose.publish(Float64(data=dose_rate))
         self.pub_dose_avg.publish(Float64(data=avg_dose))
 
         new_alarm_state = self.evaluate_threshold(dose_rate)
@@ -374,10 +419,40 @@ class GammaProbeNode(object):
             self.serial_conn = None
 
 
+def create_shared_ads_probes():
+    connection = rospy.get_param("~connection", None)
+    if not isinstance(connection, dict):
+        raise ValueError("Shared ADS requires a ~connection dictionary")
+    allowed = {
+        "ads_host", "ads_ams_net_id", "ads_local_ams_net_id", "ads_port",
+        "ads_timeout_ms", "ads_poll_interval", "ads_stale_timeout",
+    }
+    if set(connection) - allowed:
+        raise ValueError("Unknown shared ADS connection settings: %s" %
+                         ", ".join(sorted(set(connection) - allowed)))
+    if not isinstance(connection.get("ads_host"), str) or not connection["ads_host"].strip():
+        raise ValueError("Shared ADS requires a non-empty ads_host")
+    probes = [
+        GammaProbeNode("/probe_%d/gamma_probe" % index, connection) for index in range(1, 5)
+    ]
+    for attribute in ("ads_message_symbol", "ads_counter_symbol"):
+        if len({getattr(probe, attribute) for probe in probes}) != len(probes):
+            raise ValueError("Shared ADS requires a distinct %s for each probe" % attribute)
+    return probes
+
+
 if __name__ == "__main__":
     try:
-        node = GammaProbeNode()
-        node.run()
+        rospy.init_node("gamma_probe_node")
+        shared_ads = rospy.get_param("~shared_ads", False)
+        if type(shared_ads) is not bool:
+            raise ValueError("shared_ads must be a boolean")
+        if shared_ads:
+            probes = create_shared_ads_probes()
+            probes[0]._run_ads(probes)
+        else:
+            node = GammaProbeNode()
+            node.run()
     except rospy.ROSInterruptException:
         pass
     except (ValueError, ImportError) as e:

@@ -17,6 +17,8 @@ import types
 import unittest
 from unittest.mock import Mock, patch
 
+import yaml
+
 
 # --- Stubs, installed before importing the node ------------------------------
 
@@ -257,6 +259,67 @@ class TestDoseOutput(DriverOutputTest):
         self.assertAlmostEqual(self.dose_avg.messages[-1].data, 20.0)
 
 
+class TestProbeCalibration(DriverOutputTest):
+
+    def test_yaml_settings_apply_independently_to_dose_average_alarm_and_diagnostics(self):
+        config_path = os.path.join(os.path.dirname(_NODE_PATH), "..", "config", "probes.yaml")
+        with open(config_path) as config_file:
+            config = yaml.safe_load(config_file)
+        for index, (factor, threshold, alarm) in enumerate((
+                (1.0, 100.0, True), (2.0, 250.0, False),
+                (0.5, 40.0, True), (1.5, 151.0, False)), 1):
+            with self.subTest(probe=index):
+                settings = config["probe_%d" % index]["gamma_probe"].copy()
+                settings.update(calibration_factor=factor, dose_threshold_usvh=threshold)
+                self.run_lines([frame(dose="100.0", crc="auto"), frame(dose="90.0", crc="auto")],
+                               **{"~" + key: value for key, value in settings.items()})
+                self.assertEqual(self.doses(), [100.0 * factor, 90.0 * factor])
+                self.assertEqual(self.dose_avg.messages[-1].data, 95.0 * factor)
+                self.assertEqual(True in self.alarms(), alarm)
+                self.assertEqual(self.raw.messages[0].data, frame(dose="100.0", crc="auto").strip())
+                values = {item.key: item.value for item in self.diagnostics.messages[-1].values}
+                self.assertEqual(values["probe_name"], settings["probe_name"])
+                self.assertEqual(float(values["calibration_factor"]), factor)
+                self.assertEqual(float(values["dose_threshold_usvh"]), threshold)
+                self.assertEqual(float(values["dose_rate_usvh"]), 90.0 * factor)
+                self.assertEqual(values["overload"], "OK")
+
+    def test_alarm_hysteresis_uses_corrected_dose(self):
+        self.run_lines([frame(dose=str(value)) for value in (75, 74.5, 74)],
+                       **{"~calibration_factor": 2.0})
+        self.assertEqual(self.doses(), [150.0, 149.0, 148.0])
+        self.assertEqual(self.alarms(), [False, True, False])
+
+    def test_invalid_settings_fail_before_publishing_initial_alarm(self):
+        cases = {
+            "~calibration_factor": (0, -1, True, "1.0", None, float("nan"), float("inf")),
+            "~dose_threshold_usvh": (-1, True, "150", float("nan"), float("inf")),
+            "~alarm_hysteresis_usvh": (-1, True, "1", float("nan"), float("inf")),
+            "~probe_name": ("", "  ", 42, None),
+        }
+        for key, values in cases.items():
+            for value in values:
+                with self.subTest(parameter=key, value=value):
+                    ROSPY.reset(**{key: value})
+                    with self.assertRaisesRegex(ValueError, key[1:]):
+                        GammaProbeNode()
+                    self.assertEqual(ROSPY.publishers, {})
+
+    def test_overflow_is_logged_and_does_not_clear_an_existing_alarm(self):
+        node = self.make_node(**{"~calibration_factor": 1e308})
+        self.assertTrue(node.process_message(frame(dose="1.0")))
+        with patch.object(ROSPY, "logerr") as error:
+            self.assertFalse(node.process_message(frame(dose="2.0")))
+        error.assert_called_once()
+        self.assertEqual(self.doses(), [1e308])
+        self.assertEqual(self.alarms(), [False, True])
+        self.assertEqual(len(self.raw.messages), 2)
+
+    def test_large_finite_corrected_values_do_not_overflow_the_average(self):
+        self.run_lines([frame(dose="1.0")] * 10, **{"~calibration_factor": 1e308})
+        self.assertAlmostEqual(self.dose_avg.messages[-1].data / 1e308, 1.0)
+
+
 # --- Malformed input ---------------------------------------------------------
 
 class TestMalformedFrames(DriverOutputTest):
@@ -390,8 +453,22 @@ class TestDataLoss(DriverOutputTest):
 
 class TestCrc(DriverOutputTest):
 
-    def test_crc_ccitt_matches_the_standard_check_vector(self):
-        self.assertEqual(crc_ccitt("123456789"), 0x29B1)
+    def test_datasheet_and_captured_probe_frames_pass_verification(self):
+        self.assertEqual(crc_ccitt("$06,0133,1111,000000000.0*"), 0x96CE)
+        self.run_lines([
+            "$06,0133,1111,000000000.0*96CE\r\n",
+            "$06,0157,1111,000000000.0*637B\r\n",
+        ], **{"~verify_crc": True})
+        self.assertEqual(self.doses(), [0.0, 0.0])
+
+    def test_malformed_crc_is_rejected_when_verification_is_enabled(self):
+        for crc in ("", "123", "12345", "+123", "-123", " 123"):
+            with self.subTest(crc=crc):
+                self.run_lines([frame(crc=crc)], **{"~verify_crc": True})
+                self.assertEqual(self.doses(), [])
+
+    def test_crc_ccitt_matches_the_augmented_check_vector(self):
+        self.assertEqual(crc_ccitt("123456789"), 0xE5CC)
 
     def test_bad_crc_is_rejected_when_verification_is_enabled(self):
         self.run_lines([frame(crc="DEAD")], **{"~verify_crc": True})
@@ -413,7 +490,7 @@ class TestCrc(DriverOutputTest):
         self.assertEqual(self.doses(), [12.5])
 
 
-class TestAdsInput(DriverOutputTest):
+class AdsInputTest(DriverOutputTest):
     def setUp(self):
         self.ads = types.ModuleType("pyads")
         self.ads.ADSError = type("ADSError", (Exception,), {})
@@ -457,6 +534,8 @@ class TestAdsInput(DriverOutputTest):
             node.run()
         return node
 
+
+class TestAdsInput(AdsInputTest):
     def test_ads_uses_configured_endpoint_symbols_types_and_closes(self):
         self.run_ads([0, 2, frame(), 2], 1)
         self.assertEqual(self.doses(), [12.5])
@@ -567,6 +646,126 @@ class TestAdsInput(DriverOutputTest):
         with patch.dict(sys.modules, {"pyads": None}):
             self.run_lines([frame()])
         self.assertEqual(self.doses(), [12.5])
+
+
+class TestSharedAdsInput(AdsInputTest):
+    def make_shared_probes(self, **overrides):
+        config_path = os.path.join(os.path.dirname(_NODE_PATH), "..", "config", "probes.yaml")
+        with open(config_path) as config_file:
+            config = yaml.safe_load(config_file)
+        params = {"~connection": config["gamma_probes_ads"]["connection"].copy()}
+        params["~connection"]["ads_stale_timeout"] = 0.2
+        for index in range(1, 5):
+            prefix = "/probe_%d/gamma_probe/" % index
+            params.update({prefix + key: value
+                           for key, value in config["probe_%d" % index]["gamma_probe"].items()})
+        params.update(overrides)
+        ROSPY.reset(**params)
+        self.probes = gamma_probe_node.create_shared_ads_probes()
+        return self.probes
+
+    def cycle(self, sequences, doses=None):
+        doses = [12.5] * 4 if doses is None else doses
+        reads = []
+        for sequence, dose in zip(sequences, doses):
+            reads.extend([sequence, frame(dose=str(dose), crc="auto"), sequence])
+        return reads
+
+    def run_shared(self, reads, ticks):
+        self.plc.read_by_name.side_effect = reads
+        self.clock = 0.0
+        self.sleeps = []
+
+        def sleep(duration):
+            self.clock += duration
+            self.sleeps.append(duration)
+            if len(self.sleeps) >= ticks:
+                ROSPY.shutdown = True
+
+        with patch.object(gamma_probe_node.time, "monotonic", side_effect=lambda: self.clock), \
+                patch.object(gamma_probe_node.time, "sleep", side_effect=sleep):
+            self.probes[0]._run_ads(self.probes)
+
+    def test_one_connection_publishes_four_independent_calibrated_channels(self):
+        self.make_shared_probes(**{
+            "/probe_1/gamma_probe/calibration_factor": 2.0,
+            "/probe_1/gamma_probe/dose_threshold_usvh": 15.0,
+            "/probe_2/gamma_probe/calibration_factor": 0.5,
+            "/probe_2/gamma_probe/dose_threshold_usvh": 15.0,
+        })
+        reads = [0] * 4 + self.cycle([2] * 4, [10, 20, 30, 40])
+        reads += self.cycle([4] * 4, [12, 24, 36, 48])
+        self.run_shared(reads, 2)
+        self.ads.Connection.assert_called_once_with("5.176.89.72.1.1", 851, "172.31.1.100")
+        self.ads.set_local_address.assert_called_once_with("172.31.1.89.1.1")
+        self.plc.open.assert_called_once_with()
+        self.plc.close.assert_called_once_with()
+        for index, (probe, expected) in enumerate(zip(
+                self.probes, ([20, 24], [10, 12], [30, 36], [40, 48])), 1):
+            self.assertEqual([msg.data for msg in probe.pub_dose.messages], expected)
+            self.assertEqual(probe.pub_dose_avg.messages[-1].data, sum(expected) / 2)
+            self.assertEqual(probe.pub_dose.topic, "/probe_%d/gamma_probe/dose_rate" % index)
+            self.assertTrue(probe.pub_alarm.latch)
+        self.assertEqual([probe.alarm_active for probe in self.probes], [True, False, False, False])
+        counter_reads = [call.args[0] for call in self.plc.read_by_name.call_args_list
+                         if call.args[1] == "UDINT"]
+        self.assertEqual(counter_reads[:4], ["GVL_DoseProbes.nRxSequence" + letter for letter in "ABCD"])
+
+    def test_retained_crc_bad_torn_and_odd_channels_do_not_block_a_fresh_channel(self):
+        self.make_shared_probes()
+        bad = frame(crc="DEAD")
+        reads = [8] * 4 + self.cycle([8] * 4)
+        reads += [10, bad, 10, 10, frame(crc="auto"), 10,
+                  10, frame(crc="auto"), 12, 11]
+        self.run_shared(reads, 2)
+        self.assertEqual([len(probe.pub_dose.messages) for probe in self.probes], [0, 1, 0, 0])
+        self.assertEqual(self.probes[0].pub_raw.messages[0].data, bad.strip())
+        self.assertEqual(self.probes[0].pub_diagnostics.messages[-1].level, FakeDiagnosticStatus.ERROR)
+        self.assertEqual(self.probes[1].pub_diagnostics.messages[-1].level, FakeDiagnosticStatus.OK)
+
+    def test_staleness_and_recovery_only_reset_the_affected_average(self):
+        self.make_shared_probes()
+        reads = [0] * 4 + self.cycle([2] * 4, [200, 10, 10, 10])
+        reads += self.cycle([2, 4, 4, 4], [200, 20, 20, 20])
+        reads += self.cycle([2, 6, 6, 6], [200, 30, 30, 30])
+        reads += self.cycle([4, 8, 8, 8], [20, 40, 40, 40])
+        self.run_shared(reads, 4)
+        first = self.probes[0]
+        self.assertEqual([msg.data for msg in first.pub_dose_avg.messages], [200, 20])
+        self.assertEqual([msg.data for msg in first.pub_alarm.messages], [False, True, False])
+        self.assertEqual(sum(msg.level == FakeDiagnosticStatus.STALE
+                             for msg in first.pub_diagnostics.messages), 2)
+        for probe in self.probes[1:]:
+            self.assertEqual(probe.pub_dose_avg.messages[-1].data, 25.0)
+            self.assertEqual(sum(msg.level == FakeDiagnosticStatus.STALE
+                                 for msg in probe.pub_diagnostics.messages), 1)
+
+    def test_shared_failure_marks_every_channel_and_reconnect_baselines_each_counter(self):
+        self.make_shared_probes()
+        reads = [0] * 4 + self.cycle([2] * 4, [200, 20, 30, 40])
+        reads += [self.ads.ADSError("connection lost")] + [2] * 4
+        reads += self.cycle([2] * 4) + self.cycle([4] * 4)
+        self.run_shared(reads, 4)
+        self.assertEqual(self.ads.Connection.call_count, 2)
+        self.assertEqual(self.plc.close.call_count, 2)
+        self.assertIn(5.0, self.sleeps)
+        for index, probe in enumerate(self.probes, 1):
+            self.assertEqual(len(probe.pub_dose.messages), 2)
+            self.assertEqual(probe.pub_dose_avg.messages[-1].data, 12.5)
+            failures = [msg for msg in probe.pub_diagnostics.messages
+                        if msg.level == FakeDiagnosticStatus.ERROR]
+            self.assertEqual(failures[0].name, "probe_%d/gamma_probe/ads" % index)
+        self.assertEqual([msg.data for msg in self.probes[0].pub_alarm.messages], [False, True, False])
+
+    def test_invalid_shared_connection_and_duplicate_symbols_fail_before_connecting(self):
+        for overrides in (
+                {"~connection": None}, {"~connection": {}},
+                {"~connection": {"ads_host": "172.31.1.100", "misspelled_setting": 1}},
+                {"/probe_2/gamma_probe/ads_message_symbol": "GVL_DoseProbes.sRawMessageA"},
+                {"/probe_2/gamma_probe/ads_counter_symbol": "GVL_DoseProbes.nRxSequenceA"}):
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                self.make_shared_probes(**overrides)
+        self.ads.Connection.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -16,7 +16,8 @@
     <arg name="ads_poll_interval" default="0.1"/>
     <arg name="ads_stale_timeout" default="5.0"/>
 
-    <!-- Shared alarm settings -->
+    <!-- YAML overrides the shared alarm defaults; an empty path disables it. -->
+    <arg name="probe_config" default="$(find jcs_gamma_probe)/config/probes.yaml"/>
     <arg name="dose_threshold_usvh" default="150.0"/>
     <arg name="alarm_hysteresis_usvh" default="1.0"/>
     <arg name="verify_crc" default="false"/>
@@ -101,4 +102,5 @@
         <arg name="verify_crc" value="$(arg verify_crc)"/>
         <arg name="frame_id" value="gamma_probe_4"/>
     </include>
+    <rosparam command="load" file="$(arg probe_config)" if="$(eval arg('probe_config') != '')"/>
 </launch>

@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<launch>
+    <node name="gamma_probe_plot" pkg="jcs_gamma_probe" type="dose_web.py" output="screen">
+        <rosparam param="topics">
+            - /probe_1/gamma_probe/dose_rate
+            - /probe_2/gamma_probe/dose_rate
+            - /probe_3/gamma_probe/dose_rate
+            - /probe_4/gamma_probe/dose_rate
+        </rosparam>
+    </node>
+</launch>

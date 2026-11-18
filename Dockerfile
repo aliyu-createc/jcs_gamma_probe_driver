@@ -2,9 +2,11 @@ FROM ros:noetic-ros-base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install pyserial
+COPY requirements-ads.txt /tmp/requirements-ads.txt
+RUN pip3 install pyserial -r /tmp/requirements-ads.txt
 
 RUN mkdir -p /catkin_ws/src
 COPY . /catkin_ws/src/jcs_gamma_probe

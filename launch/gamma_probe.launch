@@ -23,11 +23,15 @@
     <arg name="dose_threshold_usvh" default="150.0"/>
     <arg name="alarm_hysteresis_usvh" default="1.0"/>
     <arg name="verify_crc" default="false"/>
+    <arg name="probe_name" default="Gamma Probe"/>
+    <arg name="calibration_factor" default="1.0"/>
+    <arg name="probe_namespace" default=""/>
+    <arg name="probe_config" default=""/>
 
     <!-- Frame ID for published messages; override per probe in multi-probe setups. -->
     <arg name="frame_id" default="gamma_probe"/>
 
-    <node name="gamma_probe" pkg="jcs_gamma_probe" type="gamma_probe_node.py" output="screen">
+    <node name="gamma_probe" ns="$(arg probe_namespace)" pkg="jcs_gamma_probe" type="gamma_probe_node.py" output="screen">
         <param name="port" value="$(arg port)"/>
         <param name="baud_rate" value="$(arg baud_rate)"/>
         <param name="tcp_host" value="$(arg tcp_host)"/>
@@ -45,5 +49,10 @@
         <param name="alarm_hysteresis_usvh" value="$(arg alarm_hysteresis_usvh)"/>
         <param name="verify_crc" value="$(arg verify_crc)"/>
         <param name="frame_id" value="$(arg frame_id)"/>
+        <param name="probe_name" value="$(arg probe_name)" type="str"/>
+        <param name="calibration_factor" value="$(arg calibration_factor)" type="double"/>
     </node>
+
+    <!-- Load last so per-probe YAML values override launch defaults. -->
+    <rosparam command="load" file="$(arg probe_config)" if="$(eval arg('probe_config') != '')"/>
 </launch>

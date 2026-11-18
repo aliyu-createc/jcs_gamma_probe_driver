@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<launch>
+    <arg name="probe_config" default="$(find jcs_gamma_probe)/config/probes.yaml"/>
+    <rosparam command="load" file="$(arg probe_config)"/>
+    <node name="gamma_probes_ads" pkg="jcs_gamma_probe" type="gamma_probe_node.py" output="screen">
+        <param name="shared_ads" value="true" type="bool"/>
+    </node>
+</launch>

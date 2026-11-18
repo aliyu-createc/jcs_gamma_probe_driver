@@ -1,0 +1,56 @@
+# Dose thresholds and hysteresis are in corrected uSv/h.
+# A factor of 1.0 leaves the probe-reported dose unchanged.
+# Restart the driver and viewer after editing; this does not calibrate hardware.
+gamma_probes_ads:
+  connection:
+    ads_host: "172.31.1.100"
+    ads_ams_net_id: "5.176.89.72.1.1"
+    ads_local_ams_net_id: "172.31.1.89.1.1"
+    ads_port: 851
+    ads_timeout_ms: 2000
+    ads_poll_interval: 0.1
+    ads_stale_timeout: 5.0
+
+probe_1:
+  gamma_probe:
+    ads_message_symbol: GVL_DoseProbes.sRawMessageA
+    ads_counter_symbol: GVL_DoseProbes.nRxSequenceA
+    verify_crc: true
+    frame_id: gamma_probe_1
+    probe_name: Import Drum Probe
+    dose_threshold_usvh: 150.0
+    alarm_hysteresis_usvh: 1.0
+    calibration_factor: 1.0
+
+probe_2:
+  gamma_probe:
+    ads_message_symbol: GVL_DoseProbes.sRawMessageB
+    ads_counter_symbol: GVL_DoseProbes.nRxSequenceB
+    verify_crc: true
+    frame_id: gamma_probe_2
+    probe_name: LLW Drum Probe
+    dose_threshold_usvh: 150.0
+    alarm_hysteresis_usvh: 1.0
+    calibration_factor: 1.0
+
+probe_3:
+  gamma_probe:
+    ads_message_symbol: GVL_DoseProbes.sRawMessageC
+    ads_counter_symbol: GVL_DoseProbes.nRxSequenceC
+    verify_crc: true
+    frame_id: gamma_probe_3
+    probe_name: HDRI Drum Probe
+    dose_threshold_usvh: 150.0
+    alarm_hysteresis_usvh: 1.0
+    calibration_factor: 1.0
+
+probe_4:
+  gamma_probe:
+    ads_message_symbol: GVL_DoseProbes.sRawMessageD
+    ads_counter_symbol: GVL_DoseProbes.nRxSequenceD
+    verify_crc: true
+    frame_id: gamma_probe_4
+    probe_name: Fuel Drum Probe
+    dose_threshold_usvh: 150.0
+    alarm_hysteresis_usvh: 1.0
+    calibration_factor: 1.0

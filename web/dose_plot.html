@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gamma Monitor | Probe Dashboard</title>
+  <style>
+    :root { color-scheme: light; --ink: #172b40; --muted: #64758a; --border: #dde5ed; --teal: #087f8c; --green: #18764b; --red: #b63242; --amber: #99620b; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f0f4f8; color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .masthead { background: #13283e; color: white; }
+    .masthead-inner, main, footer { max-width: 1440px; margin: auto; padding-left: 28px; padding-right: 28px; }
+    .masthead-inner { min-height: 88px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .brand { display: flex; align-items: center; gap: 14px; }
+    .brand-mark { width: 40px; height: 40px; border: 1px solid #477286; border-radius: 10px; display: grid; grid-template-columns: repeat(3, 4px); justify-content: center; align-items: end; gap: 4px; padding: 10px; background: #1b3c50; }
+    .brand-mark i { background: #75d4cf; border-radius: 2px; height: 10px; }
+    .brand-mark i:nth-child(2) { height: 21px; }
+    .brand-mark i:nth-child(3) { height: 15px; }
+    h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -.5px; }
+    .subtitle { color: #a9bfd1; font-size: 12px; margin-top: 2px; }
+    .header-meta { display: flex; align-items: center; gap: 22px; }
+    #connection { display: inline-flex; align-items: center; gap: 7px; color: #d7e4ee; font-size: 12px; white-space: nowrap; }
+    #connection::before { content: ""; height: 7px; width: 7px; border-radius: 50%; background: #d7b26d; }
+    #connection[data-state="connected"]::before { background: #70d7b0; }
+    #connection[data-state="error"] { color: #ffc0c8; }
+    #connection[data-state="error"]::before { background: #fa9ba8; }
+    .clock-block { border-left: 1px solid #3b5064; padding-left: 22px; text-align: right; }
+    #clock { font-size: 20px; font-variant-numeric: tabular-nums; letter-spacing: .5px; }
+    .clock-label { font-size: 10px; color: #a9bfd1; text-transform: uppercase; letter-spacing: 1px; }
+    main { padding-top: 22px; }
+    .overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
+    .overview-item { border: 1px solid var(--border); border-radius: 10px; background: white; padding: 13px 18px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .overview-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; }
+    .overview-value { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .overview-value small { font-size: 14px; color: var(--muted); font-weight: 400; }
+    .healthy-value { color: var(--green); }
+    .alarm-value[data-active="true"] { color: var(--red); }
+    .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+    h2 { margin: 0; font-size: 14px; font-weight: 650; }
+    .section-meta { color: var(--muted); font-size: 11px; }
+    #probes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+    .probe { min-width: 0; background: white; border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 3px 12px #203c5410; overflow: hidden; }
+    .probe-header { padding: 16px 20px 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid #edf1f5; }
+    .probe-identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .probe-identity > div:last-child { min-width: 0; }
+    .probe-number { width: 33px; height: 33px; flex-shrink: 0; display: grid; place-items: center; background: #edf4f6; border: 1px solid #d5e7eb; border-radius: 8px; color: var(--teal); font-weight: 700; font-size: 12px; }
+    h3 { margin: 0; font-size: 14px; font-weight: 650; overflow-wrap: anywhere; }
+    .device-id { color: var(--muted); font-size: 10px; margin-top: 1px; }
+    .status { display: inline-flex; align-items: center; gap: 6px; border-radius: 6px; padding: 5px 8px; font-size: 10px; font-weight: 650; white-space: nowrap; background: #f0f3f6; color: #687889; }
+    .status::before, .health-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+    .status[data-tone="healthy"] { color: var(--green); background: #eaf6ee; }
+    .status[data-tone="alarm"], .status[data-tone="fault"] { color: var(--red); background: #fff0f2; }
+    .status[data-tone="stale"], .status[data-tone="warning"] { color: var(--amber); background: #fff6e6; }
+    .probe-body { padding: 14px 20px 0; }
+    .metrics { display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; }
+    .metric-label { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+    .dose-value { font-size: 36px; line-height: 1.25; font-weight: 600; letter-spacing: -1.5px; font-variant-numeric: tabular-nums; }
+    .unit { font-size: 12px; font-weight: 450; color: var(--muted); letter-spacing: 0; margin-left: 4px; }
+    .average-value { font-size: 25px; line-height: 1.7; font-weight: 550; color: #6656a6; font-variant-numeric: tabular-nums; letter-spacing: -.5px; }
+    .metric-stale { opacity: .55; }
+    .reading-meta { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 10px; margin-top: 3px; margin-bottom: 12px; }
+    .alarm-indicator { color: var(--muted); }
+    .alarm-indicator[data-active="true"] { color: var(--red); font-weight: 650; }
+    .chart-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 15px; color: var(--muted); font-size: 10px; }
+    .chart-key { display: inline-flex; align-items: center; gap: 5px; }
+    .swatch { display: inline-block; width: 17px; border-top: 2px solid var(--teal); }
+    .swatch.average { border-color: #7862b4; border-top-style: dashed; }
+    .swatch.limit { border-color: #c15d67; border-top-style: dashed; }
+    .chart-wrap { position: relative; margin-top: 4px; }
+    canvas { display: block; width: 100%; height: 160px; }
+    .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #7d8c9b; font-size: 11px; pointer-events: none; }
+    .chart-empty[hidden] { display: none; }
+    .health { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding: 12px 0; gap: 7px; border-top: 1px solid #edf1f5; }
+    .health-label { color: var(--muted); font-size: 9px; white-space: nowrap; margin-bottom: 4px; }
+    .health-status { display: flex; align-items: center; gap: 5px; font-size: 10px; font-weight: 600; color: #84909d; }
+    .health-status[data-state="ok"] { color: var(--green); }
+    .health-status[data-state="fault"] { color: var(--red); }
+    .health-status[data-state="unknown"] { color: var(--amber); }
+    details { border-top: 1px solid #edf1f5; padding: 7px 20px; color: var(--muted); font-size: 10px; }
+    summary { cursor: pointer; width: fit-content; }
+    .detail-content { padding: 7px 0; overflow-wrap: anywhere; }
+    .detail-content p { margin: 3px 0; }
+    footer { display: flex; justify-content: space-between; gap: 16px; padding-top: 16px; padding-bottom: 20px; color: #718094; font-size: 10px; }
+    @media (max-width: 800px) {
+      .masthead-inner, main, footer { padding-left: 16px; padding-right: 16px; }
+      .header-meta { gap: 12px; }
+      .clock-block { display: none; }
+      .overview { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+      #probes { grid-template-columns: minmax(0, 1fr); }
+      .section-meta { font-size: 10px; }
+    }
+    @media (max-width: 420px) {
+      h1 { font-size: 18px; }
+      .brand-mark { display: none; }
+      .probe-header { padding-left: 14px; padding-right: 14px; }
+      .probe-body { padding-left: 14px; padding-right: 14px; }
+      .dose-value { font-size: 31px; }
+      .unit { font-size: 10px; }
+      .overview-item { padding: 10px 12px; }
+      footer { flex-direction: column; gap: 4px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></div>
+        <div><h1>Gamma Monitor</h1><div class="subtitle">RMS30 &middot; Radiation monitoring dashboard</div></div>
+      </div>
+      <div class="header-meta">
+        <span id="connection" role="status">Connecting</span>
+        <div class="clock-block"><div id="clock">--:--:--</div><div class="clock-label">Local time</div></div>
+      </div>
+    </div>
+  </header>
+  <main>
+    <div class="overview" aria-label="Monitoring summary">
+      <div class="overview-item"><span class="overview-label">Receiving data</span><span class="overview-value"><span id="receiving">0</span> <small>/ 4</small></span></div>
+      <div class="overview-item"><span class="overview-label">Healthy probes</span><span id="healthy" class="overview-value healthy-value">0</span></div>
+      <div class="overview-item"><span class="overview-label" title="Includes last-known active alarms when data is stale">Driver alarms</span><span id="alarms" class="overview-value alarm-value">0</span></div>
+      <div class="overview-item"><span class="overview-label">History window</span><span class="overview-value">5 <small>min</small></span></div>
+    </div>
+    <div class="section-heading"><h2>Probe overview</h2><span id="configuration" class="section-meta">Four monitoring positions</span></div>
+    <div id="probes"></div>
+  </main>
+  <footer><span>Read-only status display &middot; Stale data does not establish safe conditions.</span><span>Driver average &middot; Driver alarm &middot; Local clock time</span></footer>
+  <template id="probe-template">
+    <section class="probe">
+      <div class="probe-header">
+        <div class="probe-identity">
+          <div class="probe-number" data-field="number"></div>
+          <div><h3 data-field="title"></h3><div class="device-id" data-field="device">Awaiting probe ID</div></div>
+        </div>
+        <span class="status" data-field="status" data-tone="neutral">Connecting</span>
+      </div>
+      <div class="probe-body">
+        <div class="metrics">
+          <div><div class="metric-label" data-field="doseLabel">Instantaneous dose</div><div class="dose-value" data-field="doseMetric"><span data-field="dose">&mdash;</span><span class="unit">&micro;Sv/h</span></div></div>
+          <div><div class="metric-label" data-field="averageLabel">Mean &middot; 10 readings</div><div class="average-value" data-field="averageMetric"><span data-field="average">&mdash;</span><span class="unit">&micro;Sv/h</span></div></div>
+        </div>
+        <div class="reading-meta"><span data-field="age">Waiting for data</span><span class="alarm-indicator" data-field="alarm">Alarm unknown</span></div>
+        <div class="chart-legend">
+          <span class="chart-key"><i class="swatch"></i>Dose</span>
+          <span class="chart-key"><i class="swatch average"></i>Average</span>
+          <span class="chart-key" data-field="limit"><i class="swatch limit"></i>Limit unknown</span>
+        </div>
+        <div class="chart-wrap"><canvas role="img"></canvas><div class="chart-empty" data-field="empty">Waiting for readings</div></div>
+        <div class="health" aria-label="Probe health flags"></div>
+      </div>
+      <details><summary>Connection details</summary><div class="detail-content"><p data-field="source"></p><p data-field="diagnostics"></p></div></details>
+    </section>
+  </template>
+  <script>
+    "use strict";
+    const healthLabels = {overload: "Overload", lifetime_counts: "Lifetime counts", ht_fault: "HT fault", no_counts: "No counts"};
+    const clockFormat = {hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false};
+    const connection = document.getElementById("connection");
+    let latest = null;
+    let failed = false;
+    let receivedAt = 0;
+
+    const probes = Array.from({length: 4}, (_, index) => {
+      const card = document.getElementById("probe-template").content.firstElementChild.cloneNode(true);
+      const fields = Object.fromEntries([...card.querySelectorAll("[data-field]")].map(element => [element.dataset.field, element]));
+      fields.number.textContent = String(index + 1).padStart(2, "0");
+      fields.title.textContent = "Probe " + (index + 1);
+      fields.title.id = "probe-title-" + index;
+      card.setAttribute("aria-labelledby", fields.title.id);
+      const canvas = card.querySelector("canvas");
+      canvas.setAttribute("aria-label", "Probe " + (index + 1) + " dose and average over local clock time");
+      const flags = {};
+      Object.entries(healthLabels).forEach(([key, title]) => {
+        const item = document.createElement("div");
+        const label = document.createElement("div");
+        label.className = "health-label";
+        label.textContent = title;
+        const status = document.createElement("div");
+        status.className = "health-status";
+        status.dataset.state = "unknown";
+        status.textContent = "Unknown";
+        item.append(label, status);
+        card.querySelector(".health").append(item);
+        flags[key] = status;
+      });
+      document.getElementById("probes").append(card);
+      return {card, fields, canvas, flags};
+    });
+
+    function stateFor(series, elapsed) {
+      if (!series) return {label: latest ? "Not configured" : "Connecting", tone: "neutral", freshDose: false, healthAvailable: false};
+      const age = series.age_seconds === null ? null : series.age_seconds + elapsed;
+      const diagnostics = series.diagnostics;
+      const freshDose = !failed && age !== null && age < latest.stale_timeout;
+      const freshDiagnostics = !failed && diagnostics !== null && diagnostics.age_seconds + elapsed < latest.stale_timeout;
+      const healthAvailable = freshDose && freshDiagnostics && diagnostics.level < 2;
+      const allOK = healthAvailable && Object.keys(healthLabels).every(key => diagnostics.flags[key] === "OK");
+      const anyFault = healthAvailable && Object.keys(healthLabels).some(key => diagnostics.flags[key] === "FAULT");
+      let label = age === null ? "Waiting for data" : "Data stale";
+      let tone = age === null ? "neutral" : "stale";
+      if (failed) { label = "Disconnected"; tone = "stale"; }
+      if (freshDose && freshDiagnostics) {
+        if (diagnostics.level >= 2 || anyFault) { label = "Probe fault"; tone = "fault"; }
+        else if (allOK && diagnostics.level === 0 && series.alarm_active === false) { label = "Healthy"; tone = "healthy"; }
+        else { label = diagnostics.level === 1 ? "Warning" : "Status incomplete"; tone = "warning"; }
+      } else if (freshDose && !failed) { label = "Health unavailable"; tone = "warning"; }
+      if (series.alarm_active === true) {
+        label = healthAvailable ? "Alarm active" : "Alarm (last known)";
+        tone = "alarm";
+      }
+      return {label, tone, age, freshDose, freshDiagnostics, healthAvailable};
+    }
+
+    function drawChart(canvas, series, elapsed) {
+      const context = canvas.getContext("2d");
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = Math.round(width * ratio);
+      canvas.height = Math.round(height * ratio);
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      const now = latest ? latest.now + elapsed : 1;
+      const left = Math.max(0, now - 300);
+      const right = Math.max(1, now);
+      const histories = series ? [series.samples, series.average_samples] : [[], []];
+      const visible = histories.flatMap(history => history.filter(sample => sample[0] >= left));
+      const threshold = series ? series.threshold_usvh : null;
+      const values = visible.map(sample => sample[1]);
+      if (threshold !== null) values.push(threshold);
+      const minimum = Math.min(0, ...values);
+      const maximum = Math.max(1, ...values);
+      const low = minimum < 0 ? minimum - (maximum - minimum) * .1 : 0;
+      const high = maximum + (maximum - minimum) * .1;
+      const margin = {left: 42, right: 27, top: 12, bottom: 28};
+      const x = time => margin.left + (time - left) / (right - left) * (width - margin.left - margin.right);
+      const y = dose => margin.top + (high - dose) / (high - low) * (height - margin.top - margin.bottom);
+      context.font = "10px system-ui";
+      context.lineWidth = 1;
+      for (let i = 0; i <= 3; i++) {
+        const dose = low + (high - low) * i / 3;
+        context.strokeStyle = "#edf1f5";
+        context.beginPath();
+        context.moveTo(margin.left, y(dose));
+        context.lineTo(width - margin.right, y(dose));
+        context.stroke();
+        context.fillStyle = "#8795a4";
+        context.textAlign = "right";
+        if (series) context.fillText(Number(dose.toPrecision(3)).toString(), margin.left - 7, y(dose) + 3);
+        if (latest) {
+          const time = left + (right - left) * i / 3;
+          context.textAlign = "center";
+          context.fillText(new Date((latest.started_at + time) * 1000).toLocaleTimeString([], clockFormat), x(time), height - 7);
+        }
+      }
+      if (threshold !== null) {
+        context.setLineDash([4, 4]);
+        context.strokeStyle = "#c15d67";
+        context.beginPath();
+        context.moveTo(margin.left, y(threshold));
+        context.lineTo(width - margin.right, y(threshold));
+        context.stroke();
+        context.setLineDash([]);
+      }
+      histories.forEach((history, curve) => {
+        const samples = history.filter(sample => sample[0] >= left);
+        context.strokeStyle = curve === 0 ? "#087f8c" : "#7862b4";
+        context.fillStyle = context.strokeStyle;
+        context.lineWidth = curve === 0 ? 1.5 : 2;
+        context.setLineDash(curve === 0 ? [] : [5, 3]);
+        context.beginPath();
+        let previous = null;
+        samples.forEach(sample => {
+          if (previous === null || sample[0] - previous[0] > latest.stale_timeout) context.moveTo(x(sample[0]), y(sample[1]));
+          else context.lineTo(x(sample[0]), y(sample[1]));
+          previous = sample;
+        });
+        context.stroke();
+        context.setLineDash([]);
+        if (samples.length === 1) {
+          context.beginPath();
+          context.arc(x(samples[0][0]), y(samples[0][1]), 2.5, 0, Math.PI * 2);
+          context.fill();
+        }
+      });
+      return visible.length > 0;
+    }
+
+    function render() {
+      const elapsed = latest ? (performance.now() - receivedAt) / 1000 : 0;
+      let receiving = 0;
+      let healthy = 0;
+      let alarms = 0;
+      document.getElementById("clock").textContent = new Date().toLocaleTimeString([], clockFormat);
+      probes.forEach((probe, index) => {
+        const series = latest && index < latest.series.length ? latest.series[index] : null;
+        const state = stateFor(series, elapsed);
+        const fields = probe.fields;
+        const name = series && series.probe_name ? series.probe_name : "Probe " + (index + 1);
+        fields.title.textContent = name;
+        probe.canvas.setAttribute("aria-label", name + " dose and average over local clock time");
+        fields.status.textContent = state.label;
+        fields.status.dataset.tone = state.tone;
+        fields.status.title = series && series.diagnostics ? series.diagnostics.message : state.label;
+        fields.empty.hidden = drawChart(probe.canvas, series, elapsed);
+        fields.empty.textContent = series ? series.samples.length || series.average_samples.length
+          ? "No recent readings" : "Waiting for readings" : latest ? "No topic configured" : "Connecting to viewer";
+        if (state.freshDose) receiving++;
+        if (state.tone === "healthy") healthy++;
+        if (series && series.alarm_active === true) alarms++;
+        const last = series && series.samples.length ? series.samples[series.samples.length - 1] : null;
+        const average = series && series.average_samples.length ? series.average_samples[series.average_samples.length - 1] : null;
+        const freshAverage = series && !failed && series.average_age_seconds !== null && series.average_age_seconds + elapsed < latest.stale_timeout;
+        fields.dose.textContent = last ? last[1].toFixed(3) : "\u2014";
+        fields.average.textContent = average ? average[1].toFixed(3) : "\u2014";
+        fields.doseMetric.classList.toggle("metric-stale", !!last && !state.freshDose);
+        fields.averageMetric.classList.toggle("metric-stale", !!average && !freshAverage);
+        fields.doseLabel.textContent = last && !state.freshDose ? "Last dose (stale)" : "Instantaneous dose";
+        fields.averageLabel.textContent = average && !freshAverage ? "Mean (last known)" : "Mean \u00b7 10 readings";
+        fields.age.textContent = !latest ? "Waiting for viewer" : failed && series ? "Viewer disconnected" : state.age === undefined || state.age === null
+          ? series ? "No readings received" : "No source assigned" : "Last sample " + state.age.toFixed(1) + "s ago";
+        const diagnostics = series ? series.diagnostics : null;
+        const identified = diagnostics && Object.values(diagnostics.flags).some(value => value !== null);
+        fields.device.textContent = identified && diagnostics.hardware_id ? "S/N " + diagnostics.hardware_id : "Awaiting probe ID";
+        fields.alarm.dataset.active = series && series.alarm_active === true ? "true" : "false";
+        const alarmCurrent = state.healthAvailable;
+        fields.alarm.textContent = !series || series.alarm_active === null ? "Alarm unknown"
+          : series.alarm_active ? alarmCurrent ? "Alarm active" : "Alarm active \u00b7 last known"
+          : alarmCurrent ? "Alarm inactive" : "Alarm unknown \u00b7 last inactive";
+        fields.limit.replaceChildren();
+        const swatch = document.createElement("i");
+        swatch.className = "swatch limit";
+        fields.limit.append(swatch, document.createTextNode(series && series.threshold_usvh !== null ? "Limit " + series.threshold_usvh + " \u00b5Sv/h" : "Limit unknown"));
+        Object.keys(healthLabels).forEach(key => {
+          const value = state.healthAvailable ? diagnostics.flags[key] : null;
+          probe.flags[key].dataset.state = value === "OK" ? "ok" : value === "FAULT" ? "fault" : "unknown";
+          probe.flags[key].textContent = value === "OK" ? "OK" : value === "FAULT" ? "Fault" : "Unknown";
+          probe.flags[key].title = value === null ? "Missing or stale health data" : healthLabels[key] + ": " + value;
+        });
+        fields.source.textContent = series ? "ROS topic: " + series.topic : "No source assigned. Configure the viewer's _topics parameter.";
+        fields.diagnostics.textContent = diagnostics ? (state.freshDiagnostics ? "" : "Last known: ") + diagnostics.message : "No diagnostics received.";
+      });
+      document.getElementById("receiving").textContent = receiving;
+      document.getElementById("healthy").textContent = healthy;
+      document.getElementById("alarms").textContent = alarms;
+      document.getElementById("alarms").dataset.active = alarms > 0 ? "true" : "false";
+      document.getElementById("configuration").textContent = latest ? latest.series.length + " configured \u00b7 4 positions" : "Four monitoring positions";
+    }
+
+    async function poll() {
+      try {
+        const response = await fetch("/api/data", {cache: "no-store", signal: AbortSignal.timeout(3000)});
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        latest = await response.json();
+        receivedAt = performance.now();
+        failed = false;
+        connection.dataset.state = "connected";
+        connection.textContent = "Viewer connected";
+        connection.title = "Per-probe status is shown on each panel";
+      } catch (error) {
+        failed = true;
+        connection.dataset.state = "error";
+        connection.textContent = "Viewer disconnected";
+        connection.title = error.message;
+      }
+      render();
+      window.setTimeout(poll, 500);
+    }
+
+    window.addEventListener("resize", render);
+    window.setInterval(render, 500);
+    render();
+    poll();
+  </script>
+</body>
+</html>
